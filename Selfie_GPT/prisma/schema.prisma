@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String    @id @db.VarChar(20) // phone id without '+'
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  sessions   Session?
+  photos     Photo[]
+  prompts    PromptLog[]
+}
+
+model Session {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  state             String   // e.g., MENU, REALISM, STYLIZE, SCENE, AWAITING_PHOTO, AWAITING_DESC
+  submenu           String?
+  paginationOffset  Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Photo {
+  id           String    @id @default(cuid())
+  userId       String
+  indexNumber  Int
+  originalPath String
+  mime         String
+  createdAt    DateTime  @default(now())
+
+  user     User     @relation(fields: [userId], references: [id])
+  variants Variant[]
+
+  @@unique([userId, indexNumber])
+  @@index([userId, createdAt])
+}
+
+model Variant {
+  id         String   @id @default(cuid())
+  photoId    String
+  mode       Int      // 1=Realism, 2=Stylize, 3=Scene/Effect
+  resultPath String
+  promptText String
+  createdAt  DateTime @default(now())
+
+  photo Photo @relation(fields: [photoId], references: [id])
+
+  @@index([photoId, createdAt])
+}
+
+model PromptLog {
+  id         String   @id @default(cuid())
+  userId     String
+  category   String   // G3.1 / G4.1 / G5.1
+  inputText  String
+  gptSummary String
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  @@index([userId, createdAt])
+}
+
+
+
+
+
+
+
+
+
