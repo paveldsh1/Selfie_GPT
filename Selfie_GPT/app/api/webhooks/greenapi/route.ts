@@ -1,3 +1,4 @@
+export const runtime = 'nodejs';
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { logger } from '@/lib/logger';
@@ -40,7 +41,11 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
       const bin = await downloadFile(url);
-      const faceOk = await hasHumanFace(bin).catch(() => false);
+      console.log("11111111111111111111111111111111111111111111");
+      const faceOk = await hasHumanFace(bin).catch((e) => {
+        logger.error({ e: String(e) }, 'face-detect failed');
+        return false;
+      });
       if (!faceOk) {
         logger.warn({ phoneId }, 'no human face detected');
         await sendText(phoneId, ui.notHuman);

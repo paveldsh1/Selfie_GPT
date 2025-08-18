@@ -5,6 +5,7 @@ import { imageEdit } from '../lib/openai';
 import { saveVariant } from '../lib/storage';
 import { sendImageFile, sendText } from '../lib/greenapi';
 import { logger } from '../lib/logger';
+import { normalizeToSquare } from '../lib/image';
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 const connection = new IORedis(redisUrl, {
@@ -26,7 +27,13 @@ new Worker<ImageJob>(
   'image-generate',
   async (job) => {
     const { phoneId, indexNumber, mode, originalPath, prompt } = job.data;
-    const buf = await imageEdit({ imagePath: originalPath, prompt });
+    // Normalize original to configured square before sending to OpenAI
+    const fs = await import('fs/promises');
+    const orig = await fs.readFile(originalPath);
+    const normalized = await normalizeToSquare(orig);
+    const tmp = `${originalPath}.normalized.png`;
+    await fs.writeFile(tmp, normalized);
+    const buf = await imageEdit({ imagePath: tmp, prompt });
     const saved = await saveVariant(phoneId, indexNumber, mode, buf);
     await sendImageFile(phoneId, saved.fullPath, 'Here is the result.');
     await sendText(
