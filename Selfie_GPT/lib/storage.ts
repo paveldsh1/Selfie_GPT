@@ -52,4 +52,18 @@ export const deleteAllUserData = async (phoneId: string) => {
   await fsp.rm(dir, { recursive: true, force: true });
 };
 
+export const getLatestOriginal = async (
+  phoneId: string
+): Promise<{ indexNumber: number; fullPath: string; filename: string } | null> => {
+  const dir = await ensureUserDir(phoneId);
+  const files = await fsp.readdir(dir).catch(() => [] as string[]);
+  const originals = files
+    .filter((f) => /^\d{4}\.(jpg|jpeg|png|webp)$/i.test(f))
+    .sort((a, b) => (a < b ? 1 : -1));
+  if (!originals.length) return null;
+  const filename = originals[0];
+  const idx = Number(filename.slice(0, 4));
+  return { indexNumber: idx, fullPath: path.join(dir, filename), filename };
+};
+
 

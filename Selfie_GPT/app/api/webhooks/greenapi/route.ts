@@ -6,6 +6,9 @@ import { hasHumanFace } from '@/lib/face-detect';
 import { saveOriginal, listUserFiles, deleteAllUserData } from '@/lib/storage';
 import { ui } from '@/lib/messages';
 import { getOrCreateSession, setSessionState } from '@/lib/db';
+import { buildPrompt } from '@/lib/prompt';
+import { queue as imageQueue } from '@/jobs/image-generate';
+import { getLatestOriginal } from '@/lib/storage';
 import mime from 'mime-types';
 
 const webhookSchema = z.object({
@@ -89,8 +92,47 @@ export async function POST(req: NextRequest) {
         await sendText(phoneId, ui.mainMenu);
         return Response.json({ ok: true });
       }
-      // For now, echo the main menu for unrecognized text
-      logger.info({ phoneId, t }, 'unrecognized text, send main menu');
+
+      // Mode selection 1/2/3 → ask details
+      if (['1', '2', '3'].includes(t)) {
+        const map: Record<string, 'realism' | 'stylize' | 'scene'> = { '1': 'realism', '2': 'stylize', '3': 'scene' };
+        const type = map[t];
+        await setSessionState(phoneId, type);
+        const ask = type === 'realism' ? ui.askRealismDetail : type === 'stylize' ? ui.askStylizeDetail : ui.askSceneDetail;
+        await sendText(phoneId, ask);
+        return Response.json({ ok: true });
+      }
+
+      // If we are in a mode, treat text as detail: build GPT prompt and enqueue image job
+      const session = await getOrCreateSession(phoneId);
+      if (['realism', 'stylize', 'scene'].includes(session.state)) {
+        const type = session.state as 'realism' | 'stylize' | 'scene';
+        const userText = (messageData?.textMessageData?.textMessage || '').trim();
+        if (!userText) {
+          await sendText(phoneId, ui.askOwnOption);
+          return Response.json({ ok: true });
+        }
+        const summary = await buildPrompt(type, userText);
+        const latest = await getLatestOriginal(phoneId);
+        if (!latest) {
+          await sendText(phoneId, 'Please upload a selfie first.');
+          return Response.json({ ok: true });
+        }
+        const mode = type === 'realism' ? 1 : type === 'stylize' ? 2 : 3;
+        await imageQueue.add('gen', {
+          phoneId,
+          indexNumber: latest.indexNumber,
+          mode,
+          originalPath: latest.fullPath,
+          prompt: summary
+        });
+        await sendText(phoneId, 'Processing… I will send the result soon.');
+        await setSessionState(phoneId, 'MENU', null, 0);
+        return Response.json({ ok: true });
+      }
+
+      // Default fallback
+      logger.info({ phoneId, t }, 'fallback to main menu');
       await sendText(phoneId, ui.mainMenu);
       return Response.json({ ok: true });
     }
