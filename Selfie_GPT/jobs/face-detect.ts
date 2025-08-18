@@ -21,27 +21,20 @@ const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379'
 });
 
 let initialized = false;
-let faceapi: any;
+let blazeface: any;
 let tf: any;
-let createCanvas: any;
-let loadImage: any;
 async function init(model: 'tiny' | 'ssd') {
   if (initialized) return;
   // Dynamic imports AFTER polyfill
-  const face = await import('@vladmandic/face-api/dist/face-api.esm.js');
+  const blaze = await import('@tensorflow-models/blazeface');
   const tfpkg = await import('@tensorflow/tfjs');
-  const canv = await import('canvas');
-  faceapi = face as any;
+  blazeface = blaze as any;
   tf = tfpkg as any;
-  createCanvas = (canv as any).createCanvas;
-  loadImage = (canv as any).loadImage;
   try { await tf.setBackend('cpu'); } catch {}
   await tf.ready();
-  const modelsDir = path.join(process.cwd(), 'models');
-  if (model === 'ssd') await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsDir);
-  else await faceapi.nets.tinyFaceDetector.loadFromDisk(modelsDir);
+  // blazeface loads its own weights
   initialized = true;
-  logger.info({ modelsDir, model }, 'face worker models loaded');
+  logger.info({ model: 'blazeface' }, 'face worker models loaded');
 }
 
 type JobData = { filePath: string; model: 'tiny' | 'ssd'; threshold: number; inputSize: number };
@@ -51,18 +44,21 @@ new Worker<JobData>(
   async (job) => {
     const { filePath, model, threshold, inputSize } = job.data;
     await init(model);
-    const img = await loadImage(await fs.readFile(filePath));
-    const canvas = createCanvas(img.width, img.height);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    let hasFace = false;
-    if (model === 'ssd') {
-      const detections = await faceapi.detectAllFaces(canvas as any, new faceapi.SsdMobilenetv1Options({ minConfidence: threshold }));
-      hasFace = detections.length > 0;
+    const buf = await fs.readFile(filePath);
+    let img: any;
+    if ((tf as any).node?.decodeImage) {
+      img = (tf as any).node.decodeImage(buf, 3);
     } else {
-      const detections = await faceapi.detectAllFaces(canvas as any, new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold: threshold }));
-      hasFace = detections.length > 0;
+      const jpeg = await import('jpeg-js');
+      const raw = (jpeg as any).default ? (jpeg as any).default.decode(buf, { useTArray: true }) : (jpeg as any).decode(buf, { useTArray: true });
+      // raw: { data: Uint8Array(RGBA), width, height }
+      const rgb = tf.tensor3d(raw.data, [raw.height, raw.width, 4]).slice([0,0,0],[raw.height, raw.width, 3]);
+      img = rgb;
     }
+    const net = await blazeface.load();
+    const preds = await net.estimateFaces(img as any, false);
+    const hasFace = Array.isArray(preds) && preds.length > 0;
+    img.dispose?.();
     return { hasFace };
   },
   { connection }
