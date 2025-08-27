@@ -13,6 +13,7 @@
     "db:push": "prisma db push",
     "worker": "tsx jobs/image-generate.ts",
     "face-worker": "tsx jobs/face-detect.ts",
+    "cleanup": "tsx jobs/cleanup.ts",
     "prepare": "prisma generate"
   },
   "dependencies": {

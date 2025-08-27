@@ -22,7 +22,7 @@ export const getOrCreateSession = async (userId: string) => {
   const session = await prisma.session.upsert({
     where: { userId },
     update: {},
-    create: { userId, state: 'MENU' }
+    create: { userId, state: 'TOP_MENU' }
   });
   return session;
 };
@@ -42,6 +42,24 @@ export const setSessionState = async (
     }
   });
 };
+
+export const recordPhoto = async (userId: string, indexNumber: number, originalPath: string, mime: string) => {
+  return prisma.photo.upsert({
+    where: { userId_indexNumber: { userId, indexNumber } },
+    update: { originalPath, mime },
+    create: { userId, indexNumber, originalPath, mime }
+  });
+};
+
+export const recordVariant = async (
+  photoId: string,
+  mode: number,
+  resultPath: string,
+  promptText: string
+) => prisma.variant.create({ data: { photoId, mode, resultPath, promptText } });
+
+export const recordPromptLog = async (userId: string, category: string, inputText: string, gptSummary: string) =>
+  prisma.promptLog.create({ data: { userId, category, inputText, gptSummary } });
 
 
 
