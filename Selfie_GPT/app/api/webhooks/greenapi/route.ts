@@ -27,22 +27,20 @@ export async function POST(req: NextRequest) {
   const parsed = webhookSchema.safeParse(body);
   if (!parsed.success) return Response.json({ ok: false }, { status: 400 });
 
-  const { senderData, messageData } = parsed.data;
+  const { senderData, messageData, instanceData } = parsed.data;
   const phoneId = senderData.chatId.replace(/@c\.us$/, '');
   logger.info({ type: parsed.data.typeWebhook, phoneId, kind: messageData?.typeMessage }, 'incoming webhook');
 
-  // Process only incoming messages; skip outgoing echoes to avoid loops/duplicates
-  if (parsed.data.typeWebhook !== 'incomingMessageReceived') {
+  // Process incoming messages; also allow self-chat (outgoingMessageReceived where chatId === instance wid)
+  const type = parsed.data.typeWebhook;
+  const wid: string | undefined = (instanceData?.wid as string | undefined) || undefined;
+  const isSelfChat = Boolean(wid && senderData.chatId === wid);
+  if (!(type === 'incomingMessageReceived' || (type === 'outgoingMessageReceived' && isSelfChat))) {
     return Response.json({ ok: true });
   }
 
   try {
     const session0 = await getOrCreateSession(phoneId);
-    if (!session0 || session0.state === 'TOP_MENU') {
-      // Always show top menu until user selects a bot
-      await sendText(phoneId, ui.topMenu);
-      await sendText(phoneId, ui.askSelectBot);
-    }
     if (messageData.typeMessage === 'imageMessage') {
       const url = messageData?.downloadUrl || messageData?.fileMessageData?.downloadUrl;
       logger.info({ phoneId, hasUrl: Boolean(url) }, 'imageMessage received');
@@ -129,6 +127,7 @@ export async function POST(req: NextRequest) {
       }
       if (t === 'end') {
         logger.info({ phoneId }, 'send main menu by command');
+        await setSessionState(phoneId, 'MENU', null, 0);
         await sendText(phoneId, ui.mainMenu);
         return Response.json({ ok: true });
       }
