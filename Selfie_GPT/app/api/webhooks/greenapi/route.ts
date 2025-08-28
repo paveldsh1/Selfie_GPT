@@ -21,11 +21,27 @@ const webhookSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
-  if (!body) return Response.json({ ok: false }, { status: 400 });
+  // Read raw to tolerate non-standard content-types and odd payloads
+  const raw = await req.text().catch(() => '');
+  if (!raw) {
+    logger.warn({ msg: 'webhook empty body' }, 'webhook empty');
+    // Do not force retries on provider side
+    return Response.json({ ok: true });
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch (e) {
+    logger.warn({ e: String(e), raw: raw.slice(0, 500) }, 'webhook bad json');
+    // Acknowledge to avoid retry storms; nothing we can do with non-JSON
+    return Response.json({ ok: true });
+  }
 
   const parsed = webhookSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ ok: false }, { status: 400 });
+  if (!parsed.success) {
+    logger.warn({ issues: parsed.error.issues }, 'webhook schema failed');
+    return Response.json({ ok: true });
+  }
 
   const { senderData, messageData, instanceData } = parsed.data;
   const phoneId = senderData.chatId.replace(/@c\.us$/, '');
