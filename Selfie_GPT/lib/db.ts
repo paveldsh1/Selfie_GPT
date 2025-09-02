@@ -43,6 +43,20 @@ export const setSessionState = async (
   });
 };
 
+export const shouldSendText = async (
+  userId: string,
+  textHash: string,
+  dedupWindowMs: number
+) => {
+  const s: any = await getOrCreateSession(userId);
+  const now = new Date();
+  if (s?.lastTextHash === textHash && s?.lastTextAt && now.getTime() - new Date(s.lastTextAt).getTime() < dedupWindowMs) {
+    return false;
+  }
+  await (prisma as any).session.update({ where: { userId }, data: { lastTextHash: textHash, lastTextAt: now } });
+  return true;
+};
+
 export const recordPhoto = async (userId: string, indexNumber: number, originalPath: string, mime: string) => {
   return prisma.photo.upsert({
     where: { userId_indexNumber: { userId, indexNumber } },

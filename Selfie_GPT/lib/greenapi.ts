@@ -4,6 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { env } from './env';
 import { logger } from './logger';
+import { shouldSendText } from './db';
+import crypto from 'crypto';
 
 const base = env.GREEN_API_BASE_URL.replace(/\/$/, '');
 const instance = env.GREEN_API_ID_INSTANCE;
@@ -11,7 +13,27 @@ const token = env.GREEN_API_API_TOKEN;
 
 const api = axios.create({ baseURL: base, timeout: 20000 });
 
+// Простая защита от дублей текстов: не отправляем одно и то же сообщение
+// одному и тому же пользователю чаще, чем раз в 30 секунд (память процесса)
+const recentText: Map<string, { text: string; ts: number }> = new Map();
+
+const hashText = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
+
 export const sendText = async (phoneId: string, message: string) => {
+  const now = Date.now();
+  const prev = recentText.get(phoneId);
+  if (prev && prev.text === message && now - prev.ts < 30000) {
+    logger.warn({ phoneId }, 'skip duplicate text within 30s');
+    return;
+  }
+  recentText.set(phoneId, { text: message, ts: now });
+
+  // Доп. защита от дублей на уровне БД (переживает рестарты/ретраи провайдера)
+  const ok = await shouldSendText(phoneId, hashText(message), 30000);
+  if (!ok) {
+    logger.warn({ phoneId }, 'db dedup: skip duplicate text within window');
+    return;
+  }
   const url = `/waInstance${instance}/sendMessage/${token}`;
   const data = { chatId: `${phoneId}@c.us`, message };
   await api.post(url, data).catch((e) => {

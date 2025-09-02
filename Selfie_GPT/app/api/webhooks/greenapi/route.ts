@@ -20,6 +20,12 @@ const webhookSchema = z.object({
   messageData: z.any()
 });
 
+// Анти-дубль для входящих сообщений: запоминаем последний id на короткое время
+const recentIncoming: Map<string, { id: string; ts: number }> = new Map();
+// Анти-дубль ответов: если подряд приходит тот же текст от того же номера,
+// отвечаем только один раз в течение 5000мс
+const recentTextIn: Map<string, { text: string; ts: number }> = new Map();
+
 export async function POST(req: NextRequest) {
   // Read raw to tolerate non-standard content-types and odd payloads
   const raw = await req.text().catch(() => '');
@@ -47,15 +53,34 @@ export async function POST(req: NextRequest) {
   const phoneId = senderData.chatId.replace(/@c\.us$/, '');
   logger.info({ type: parsed.data.typeWebhook, phoneId, kind: messageData?.typeMessage }, 'incoming webhook');
 
-  // Process incoming messages; also allow self-chat (outgoingMessageReceived where chatId === instance wid)
+  // Обрабатываем входящие и только исходящие СООБЩЕНИЯ, отправленные через API
   const type = parsed.data.typeWebhook;
-  const wid: string | undefined = (instanceData?.wid as string | undefined) || undefined;
-  const isSelfChat = Boolean(wid && senderData.chatId === wid);
-  if (!(type === 'incomingMessageReceived' || (type === 'outgoingMessageReceived' && isSelfChat))) {
+  if (!(type === 'incomingMessageReceived')) {
     return Response.json({ ok: true });
   }
 
   try {
+    // Дедуп входящих: некоторые провайдеры присылают одно и то же событие дважды
+    if (type === 'incomingMessageReceived') {
+      const incId = String(
+        messageData?.idMessage ||
+        messageData?.messageData?.idMessage ||
+        messageData?.timestamp ||
+        messageData?.textMessageData?.textMessage ||
+        ''
+      );
+      if (incId) {
+        const prev = recentIncoming.get(phoneId);
+        const now = Date.now();
+        if (prev && prev.id === incId && now - prev.ts < 10000) {
+          return Response.json({ ok: true });
+        }
+        recentIncoming.set(phoneId, { id: incId, ts: now });
+      }
+    }
+
+    // игнор исходящих событий больше не нужен — сюда уже не попадут, т.к. выше пропускаем всё, что не incoming
+
     const session0 = await getOrCreateSession(phoneId);
     if (messageData.typeMessage === 'imageMessage') {
       const url = messageData?.downloadUrl || messageData?.fileMessageData?.downloadUrl;
@@ -97,6 +122,12 @@ export async function POST(req: NextRequest) {
         ''
       );
       const text = String(rawText || '').trim();
+      const prevIn = recentTextIn.get(phoneId);
+      const nowIn = Date.now();
+      if (prevIn && prevIn.text === text && nowIn - prevIn.ts < 5000) {
+        return Response.json({ ok: true });
+      }
+      recentTextIn.set(phoneId, { text, ts: nowIn });
       let t = text.toLowerCase();
       logger.info({ phoneId, text }, 'textMessage received');
 
@@ -113,15 +144,11 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
       if (t === 'list') {
-        const { files, total } = await listUserFiles(phoneId, 0, 5);
-        for (const file of files) {
-          logger.info({ phoneId, file }, 'send image from list');
-          await sendImageFile(phoneId, file);
-        }
-        if (total > files.length) {
-          await sendText(phoneId, ui.listHint(total));
-        } else {
-          await sendText(phoneId, ui.listEndHint);
+        // Отправляем ВСЕ изображения; подсказку прикрепляем к ПОСЛЕДНЕМУ изображению как caption
+        const { files } = await listUserFiles(phoneId, 0, 999999);
+        for (let i = 0; i < files.length; i++) {
+          const isLast = i === files.length - 1;
+          await sendImageFile(phoneId, files[i], isLast ? ui.listEndHint : undefined);
         }
         return Response.json({ ok: true });
       }
@@ -129,10 +156,12 @@ export async function POST(req: NextRequest) {
         const session = await getOrCreateSession(phoneId);
         const next = (session.paginationOffset ?? 0) + 5;
         const { files, total } = await listUserFiles(phoneId, next, 5);
-        for (const file of files) await sendImageFile(phoneId, file);
+        for (let i = 0; i < files.length; i++) {
+          const isLast = i === files.length - 1;
+          const caption = isLast ? (next + files.length < total ? ui.listHint(total) : ui.listEndHint) : undefined;
+          await sendImageFile(phoneId, files[i], caption);
+        }
         await setSessionState(phoneId, session.state, session.submenu, next);
-        if (next + files.length < total) await sendText(phoneId, ui.listHint(total));
-        else await sendText(phoneId, ui.listEndHint);
         return Response.json({ ok: true });
       }
       if (t === '-' || t === 'delete' || t === 'del') {
