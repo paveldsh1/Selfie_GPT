@@ -18,6 +18,9 @@
     "jsx": "preserve",
     "incremental": true,
     "forceConsistentCasingInFileNames": true,
+    "sourceMap": true,
+    "inlineSourceMap": false,
+    "declaration": false,
     "types": [
       "node"
     ],

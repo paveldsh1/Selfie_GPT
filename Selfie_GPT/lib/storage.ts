@@ -1,6 +1,7 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
+import { logger } from './logger';
 
 const root = path.join(process.cwd(), 'storage');
 
@@ -41,10 +42,41 @@ export const saveVariant = async (phoneId: string, indexNumber: number, mode: nu
 };
 
 export const listUserFiles = async (phoneId: string, offset: number, limit: number) => {
+  logger.info({ phoneId, offset, limit }, 'listUserFiles called');
+  
   const dir = await ensureUserDir(phoneId);
-  const files = (await fsp.readdir(dir)).sort((a, b) => (a < b ? 1 : -1));
-  const page = files.slice(offset, offset + limit);
-  return { files: page.map((f) => path.join(dir, f)), total: files.length };
+  logger.info({ phoneId, dir }, 'user directory ensured');
+  
+  try {
+    const files = (await fsp.readdir(dir)).sort((a, b) => (a < b ? 1 : -1));
+    logger.info({ 
+      phoneId, 
+      allFiles: files, 
+      filesCount: files.length 
+    }, 'files read from directory');
+    
+    const page = files.slice(offset, offset + limit);
+    const result = { files: page.map((f) => path.join(dir, f)), total: files.length };
+    
+    logger.info({ 
+      phoneId, 
+      offset, 
+      limit, 
+      pageFiles: page,
+      fullPaths: result.files,
+      total: result.total 
+    }, 'listUserFiles result');
+    
+    return result;
+  } catch (error) {
+    logger.error({ 
+      phoneId, 
+      dir, 
+      error: String(error) 
+    }, 'listUserFiles error');
+    
+    return { files: [], total: 0 };
+  }
 };
 
 export const deleteAllUserData = async (phoneId: string) => {

@@ -16,7 +16,7 @@ import mime from 'mime-types';
 const webhookSchema = z.object({
   typeWebhook: z.string(),
   instanceData: z.any().optional(),
-  senderData: z.object({ chatId: z.string(), sender: z.string().optional() }),
+  senderData: z.object({ chatId: z.string(), sender: z.string().optional() }).optional(),
   messageData: z.any()
 });
 
@@ -29,33 +29,89 @@ const recentTextIn: Map<string, { text: string; ts: number }> = new Map();
 export async function POST(req: NextRequest) {
   // Read raw to tolerate non-standard content-types and odd payloads
   const raw = await req.text().catch(() => '');
+  
+  logger.info({ 
+    hasBody: Boolean(raw),
+    bodyLength: raw.length,
+    contentType: req.headers.get('content-type'),
+    userAgent: req.headers.get('user-agent')
+  }, 'webhook incoming request');
+  
   if (!raw) {
     logger.warn({ msg: 'webhook empty body' }, 'webhook empty');
     // Do not force retries on provider side
     return Response.json({ ok: true });
   }
+  
   let body: unknown;
   try {
     body = JSON.parse(raw);
+    logger.info({ 
+      bodyKeys: Object.keys(body as object || {}),
+      bodyType: typeof body 
+    }, 'webhook body parsed successfully');
   } catch (e) {
     logger.warn({ e: String(e), raw: raw.slice(0, 500) }, 'webhook bad json');
     // Acknowledge to avoid retry storms; nothing we can do with non-JSON
     return Response.json({ ok: true });
   }
 
+  // Детальное логирование структуры webhook перед валидацией
+  logger.info({
+    rawBody: body,
+    typeWebhook: (body as any)?.typeWebhook,
+    hasSenderData: Boolean((body as any)?.senderData),
+    senderDataStructure: (body as any)?.senderData,
+    hasMessageData: Boolean((body as any)?.messageData),
+    messageDataKeys: Object.keys((body as any)?.messageData || {}),
+    instanceData: (body as any)?.instanceData
+  }, 'webhook structure before validation');
+
   const parsed = webhookSchema.safeParse(body);
   if (!parsed.success) {
-    logger.warn({ issues: parsed.error.issues }, 'webhook schema failed');
+    logger.error({ 
+      issues: parsed.error.issues,
+      fullBody: body,
+      zodError: parsed.error.format()
+    }, 'webhook schema validation failed - DETAILED');
     return Response.json({ ok: true });
   }
 
+  logger.info({ 
+    typeWebhook: parsed.data.typeWebhook,
+    senderDataValid: Boolean(parsed.data.senderData),
+    chatId: parsed.data.senderData?.chatId,
+    sender: parsed.data.senderData?.sender,
+    messageType: parsed.data.messageData?.typeMessage
+  }, 'webhook schema validation passed');
+
   const { senderData, messageData, instanceData } = parsed.data;
+  
+  // Проверяем наличие senderData
+  if (!senderData || !senderData.chatId) {
+    logger.warn({
+      typeWebhook: parsed.data.typeWebhook,
+      hasSenderData: Boolean(senderData),
+      senderData: senderData,
+      messageDataKeys: Object.keys(messageData || {})
+    }, 'webhook missing senderData or chatId - skipping');
+    return Response.json({ ok: true });
+  }
+  
   const phoneId = senderData.chatId.replace(/@c\.us$/, '');
   logger.info({ type: parsed.data.typeWebhook, phoneId, kind: messageData?.typeMessage }, 'incoming webhook');
 
   // Обрабатываем входящие и только исходящие СООБЩЕНИЯ, отправленные через API
   const type = parsed.data.typeWebhook;
+  
+  logger.info({
+    webhookType: type,
+    willProcess: type === 'incomingMessageReceived',
+    phoneId
+  }, 'webhook type check');
+  
   if (!(type === 'incomingMessageReceived')) {
+    logger.info({ type, phoneId }, 'skipping non-incoming webhook');
     return Response.json({ ok: true });
   }
 
@@ -113,6 +169,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (messageData.typeMessage === 'textMessage' || messageData.typeMessage === 'extendedTextMessage' || messageData.typeMessage === 'quotedMessage') {
+      logger.info({
+        phoneId,
+        messageType: messageData.typeMessage,
+        messageDataKeys: Object.keys(messageData || {}),
+        textMessageData: messageData?.textMessageData,
+        extendedTextMessageData: messageData?.extendedTextMessageData,
+        quotedMessage: messageData?.quotedMessage
+      }, 'processing text message - DETAILED');
+      
       const rawText = (
         messageData?.textMessageData?.textMessage ??
         messageData?.extendedTextMessageData?.text ??
@@ -122,14 +187,24 @@ export async function POST(req: NextRequest) {
         ''
       );
       const text = String(rawText || '').trim();
-      const prevIn = recentTextIn.get(phoneId);
-      const nowIn = Date.now();
-      if (prevIn && prevIn.text === text && nowIn - prevIn.ts < 5000) {
-        return Response.json({ ok: true });
-      }
-      recentTextIn.set(phoneId, { text, ts: nowIn });
+      
+      logger.info({
+        phoneId,
+        rawText,
+        extractedText: text,
+        textLength: text.length
+      }, 'text extraction result');
+      
+      // Убрана блокировка дублей входящих сообщений (5 секунд)
+      // const prevIn = recentTextIn.get(phoneId);
+      // const nowIn = Date.now();
+      // if (prevIn && prevIn.text === text && nowIn - prevIn.ts < 5000) {
+      //   logger.info({ phoneId, text }, 'duplicate text message - skipping');
+      //   return Response.json({ ok: true });
+      // }
+      // recentTextIn.set(phoneId, { text, ts: nowIn });
       let t = text.toLowerCase();
-      logger.info({ phoneId, text }, 'textMessage received');
+      logger.info({ phoneId, text, normalizedText: t }, 'textMessage received and processed');
 
       // Top-level commands
       if (t === 'menu') {
@@ -144,12 +219,36 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
       if (t === 'list') {
+        logger.info({ phoneId }, 'processing list command');
         // Отправляем ВСЕ изображения; подсказку прикрепляем к ПОСЛЕДНЕМУ изображению как caption
-        const { files } = await listUserFiles(phoneId, 0, 999999);
+        const { files, total } = await listUserFiles(phoneId, 0, 999999);
+        
+        logger.info({ 
+          phoneId, 
+          filesCount: files.length, 
+          totalFiles: total,
+          filesList: files 
+        }, 'list command - files retrieved');
+        
+        if (files.length === 0) {
+          logger.info({ phoneId }, 'no files found - sending message');
+          await sendText(phoneId, 'No photos found. Upload a selfie first.');
+          return Response.json({ ok: true });
+        }
+        
         for (let i = 0; i < files.length; i++) {
           const isLast = i === files.length - 1;
+          logger.info({ 
+            phoneId, 
+            fileIndex: i, 
+            fileName: files[i], 
+            isLast 
+          }, 'sending file from list');
+          
           await sendImageFile(phoneId, files[i], isLast ? ui.listEndHint : undefined);
         }
+        
+        logger.info({ phoneId, sentFiles: files.length }, 'list command completed');
         return Response.json({ ok: true });
       }
       if (t === '+') {
@@ -177,23 +276,48 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
 
-      // If user has not uploaded any selfie yet, ask to upload
-      const latestOrig = await getLatestOriginal(phoneId);
-      if (!latestOrig) {
-        await sendText(phoneId, ui.askUpload);
-        return Response.json({ ok: true });
-      }
-
-      // Handle top menu bot selection
+      // Handle top menu bot selection FIRST (before checking for selfie)
       const sessionTop = await getOrCreateSession(phoneId);
+      
+      logger.info({
+        phoneId,
+        userInput: t,
+        sessionState: sessionTop.state,
+        isTopMenuSelection: sessionTop.state === 'TOP_MENU' && ['1','2','3'].includes(t)
+      }, 'checking top menu bot selection');
+      
       if (sessionTop.state === 'TOP_MENU' && ['1','2','3'].includes(t)) {
+        logger.info({ phoneId, selectedBot: t }, 'processing top menu bot selection');
+        
         if (t === '1') {
+          logger.info({ phoneId }, 'selected Selfie bot - checking for selfie requirement');
+          // Only check for selfie when user selects Selfie bot
+          const latestOrig = await getLatestOriginal(phoneId);
+          if (!latestOrig) {
+            await sendText(phoneId, ui.askUpload);
+            return Response.json({ ok: true });
+          }
+          logger.info({ phoneId }, 'selfie found - transitioning to main menu');
           await setSessionState(phoneId, 'MENU', null, 0);
           await sendText(phoneId, ui.mainMenu);
           return Response.json({ ok: true });
         }
-        // YXO or Bot3 placeholder/redirect
-        await sendText(phoneId, ui.yxoRedirect);
+        if (t === '2') {
+          logger.info({ phoneId }, 'redirecting to YXO bot');
+          await sendText(phoneId, ui.yxoRedirect);
+          return Response.json({ ok: true });
+        }
+        if (t === '3') {
+          logger.info({ phoneId }, 'redirecting to Bot3');
+          await sendText(phoneId, ui.bot3Redirect);
+          return Response.json({ ok: true });
+        }
+      }
+
+      // If user has not uploaded any selfie yet, ask to upload (only for non-bot selection)
+      const latestOrig = await getLatestOriginal(phoneId);
+      if (!latestOrig) {
+        await sendText(phoneId, ui.askUpload);
         return Response.json({ ok: true });
       }
 
@@ -208,8 +332,23 @@ export async function POST(req: NextRequest) {
       if (['1', '2', '3'].includes(t)) {
         const map: Record<string, 'realism' | 'stylize' | 'scene'> = { '1': 'realism', '2': 'stylize', '3': 'scene' };
         const type = map[t];
+        
+        logger.info({
+          phoneId,
+          userInput: t,
+          mappedType: type,
+          currentSessionState: sessionTop.state
+        }, 'processing mode selection 1/2/3');
+        
         await setSessionState(phoneId, type);
         const ask = type === 'realism' ? ui.askRealismDetail : type === 'stylize' ? ui.askStylizeDetail : ui.askSceneDetail;
+        
+        logger.info({
+          phoneId,
+          newState: type,
+          messageToSend: ask
+        }, 'sending detail selection menu');
+        
         await sendText(phoneId, ask);
         return Response.json({ ok: true });
       }

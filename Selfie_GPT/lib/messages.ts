@@ -5,6 +5,7 @@ export const ui = {
   topMenu: 'MENU:\n1. Selfie\n2. YXO\n3. Bot3',
   askSelectBot: 'Please choose a bot from the menu above.',
   yxoRedirect: 'YXO bot is handled separately. Please select "Selfie" to continue here.',
+  bot3Redirect: 'Bot3 is handled separately. Please select "Selfie" to continue here.',
   mainMenu: 'What to do with a selfie?\n1. Edit while maintaining realism\n2. Stylize (artistically)\n3. Add a scene or effect',
   realismMenu: 'Select the type of changes:\n a) Glasses, jewelry, tattoo\n b) Makeup, emotions\n c) Hair, beard, mustache\n d) Clothes\n e) Background and objects\n f) Enter your own option',
   stylizeMenu: 'Select style:\n a) Anime/Cartoon/Comic\n b) Painting: Watercolor, Oil, Pencil\n c) Full Art Portrait\n d) Fantasy/Sci-Fi Character\n e) Change Age, Gender, Ethnicity\n f) Enter your own',

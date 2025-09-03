@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { logger } from './logger';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -18,12 +19,24 @@ export const getOrCreateUser = async (userId: string) => {
 };
 
 export const getOrCreateSession = async (userId: string) => {
+  logger.info({ userId }, 'getOrCreateSession called');
+  
   await getOrCreateUser(userId);
+  
   const session = await prisma.session.upsert({
     where: { userId },
     update: {},
     create: { userId, state: 'TOP_MENU' }
   });
+  
+  logger.info({
+    userId,
+    sessionState: session.state,
+    submenu: session.submenu,
+    paginationOffset: session.paginationOffset,
+    isNewSession: !session.id
+  }, 'session retrieved/created');
+  
   return session;
 };
 
@@ -33,7 +46,14 @@ export const setSessionState = async (
   submenu?: string | null,
   paginationOffset?: number | null
 ) => {
-  return prisma.session.update({
+  logger.info({
+    userId,
+    newState: state,
+    newSubmenu: submenu,
+    newPaginationOffset: paginationOffset
+  }, 'setSessionState called');
+  
+  const result = await prisma.session.update({
     where: { userId },
     data: {
       state,
@@ -41,6 +61,15 @@ export const setSessionState = async (
       ...(typeof paginationOffset === 'number' ? { paginationOffset } : {})
     }
   });
+  
+  logger.info({
+    userId,
+    updatedState: result.state,
+    updatedSubmenu: result.submenu,
+    updatedPaginationOffset: result.paginationOffset
+  }, 'session state updated');
+  
+  return result;
 };
 
 export const shouldSendText = async (
