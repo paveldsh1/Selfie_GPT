@@ -19,9 +19,17 @@ export const imageEdit = async (opts: { imagePath: string; prompt: string; size?
   const size: AllowedImageSize = (ALLOWED_SIZES as readonly string[]).includes(rawSize || '')
     ? (rawSize as AllowedImageSize)
     : '1024x1024';
-  const stream = fs.createReadStream(opts.imagePath);
+  
+  // Create File object with proper MIME type
+  const buffer = fs.readFileSync(opts.imagePath);
+  const ext = path.extname(opts.imagePath).toLowerCase();
+  const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+  const fileName = path.basename(opts.imagePath);
+  
+  const file = new File([buffer], fileName, { type: mimeType });
+  
   // SDK provides unified images API; specify model explicitly
-  const res = await openai.images.edit({ model: 'gpt-image-1', image: [stream as any], prompt: opts.prompt, size });
+  const res = await openai.images.edit({ model: 'gpt-image-1', image: file, prompt: opts.prompt, size });
   const b64 = res.data?.[0]?.b64_json;
   if (!b64) throw new Error('OpenAI Images edit returned empty data');
   return Buffer.from(b64, 'base64');
@@ -32,8 +40,16 @@ export const imageVariation = async (opts: { imagePath: string; prompt?: string;
   const size: AllowedImageSize = (ALLOWED_SIZES as readonly string[]).includes(rawSize || '')
     ? (rawSize as AllowedImageSize)
     : '1024x1024';
-  const stream = fs.createReadStream(opts.imagePath);
-  const res = await openai.images.edit({ model: 'gpt-image-1', image: [stream as any], prompt: opts.prompt ?? '', size });
+  
+  // Create File object with proper MIME type
+  const buffer = fs.readFileSync(opts.imagePath);
+  const ext = path.extname(opts.imagePath).toLowerCase();
+  const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+  const fileName = path.basename(opts.imagePath);
+  
+  const file = new File([buffer], fileName, { type: mimeType });
+  
+  const res = await openai.images.edit({ model: 'gpt-image-1', image: file, prompt: opts.prompt ?? '', size });
   const b64 = res.data?.[0]?.b64_json;
   if (!b64) throw new Error('OpenAI Images edit returned empty data');
   return Buffer.from(b64, 'base64');

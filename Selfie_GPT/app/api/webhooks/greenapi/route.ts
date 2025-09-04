@@ -204,7 +204,24 @@ export async function POST(req: NextRequest) {
       // }
       // recentTextIn.set(phoneId, { text, ts: nowIn });
       let t = text.toLowerCase();
-      logger.info({ phoneId, text, normalizedText: t }, 'textMessage received and processed');
+      
+      // Нормализация команд: убираем точки, скобки, пробелы
+      const normalizedCommand = t.replace(/[.\)\(\s]/g, '');
+      
+      // Проверяем является ли это простой командой (цифра или буква)
+      if (/^[1-3]$/.test(normalizedCommand)) {
+        t = normalizedCommand;
+      } else if (/^[a-f]$/.test(normalizedCommand)) {
+        t = normalizedCommand;
+      }
+      
+      logger.info({ 
+        phoneId, 
+        originalText: text, 
+        normalizedText: t,
+        normalizedCommand,
+        isSimpleCommand: /^[1-3a-f]$/.test(normalizedCommand)
+      }, 'textMessage received and processed');
 
       // Top-level commands
       if (t === 'menu') {
@@ -220,8 +237,8 @@ export async function POST(req: NextRequest) {
       }
       if (t === 'list') {
         logger.info({ phoneId }, 'processing list command');
-        // Отправляем ВСЕ изображения; подсказку прикрепляем к ПОСЛЕДНЕМУ изображению как caption
-        const { files, total } = await listUserFiles(phoneId, 0, 999999);
+        // По ТЗ: показываем первые 5 изображений с подсказкой
+        const { files, total } = await listUserFiles(phoneId, 0, 5);
         
         logger.info({ 
           phoneId, 
@@ -245,22 +262,35 @@ export async function POST(req: NextRequest) {
             isLast 
           }, 'sending file from list');
           
-          await sendImageFile(phoneId, files[i], isLast ? ui.listEndHint : undefined);
+          // По ТЗ: подсказка на последнем фото если есть еще фото (больше 5), иначе меню
+          const caption = isLast ? (total > 5 ? ui.listHint(total) : ui.listEndHint) : undefined;
+          await sendImageFile(phoneId, files[i], caption);
         }
+        
+        // Сохраняем offset = files.length для команды "+"
+        const currentSession = await getOrCreateSession(phoneId);
+        await setSessionState(phoneId, currentSession.state, currentSession.submenu, files.length);
         
         logger.info({ phoneId, sentFiles: files.length }, 'list command completed');
         return Response.json({ ok: true });
       }
       if (t === '+') {
-        const session = await getOrCreateSession(phoneId);
-        const next = (session.paginationOffset ?? 0) + 5;
-        const { files, total } = await listUserFiles(phoneId, next, 5);
+        const sessionPlus = await getOrCreateSession(phoneId);
+        const currentOffset = sessionPlus.paginationOffset ?? 0;
+        const { files, total } = await listUserFiles(phoneId, currentOffset, 5);
+        
+        if (files.length === 0) {
+          await sendText(phoneId, ui.listEndHint);
+          return Response.json({ ok: true });
+        }
+        
         for (let i = 0; i < files.length; i++) {
           const isLast = i === files.length - 1;
-          const caption = isLast ? (next + files.length < total ? ui.listHint(total) : ui.listEndHint) : undefined;
+          const newOffset = currentOffset + files.length;
+          const caption = isLast ? (newOffset < total ? ui.listHint(total) : ui.listEndHint) : undefined;
           await sendImageFile(phoneId, files[i], caption);
         }
-        await setSessionState(phoneId, session.state, session.submenu, next);
+        await setSessionState(phoneId, sessionPlus.state, sessionPlus.submenu, currentOffset + files.length);
         return Response.json({ ok: true });
       }
       if (t === '-' || t === 'delete' || t === 'del') {
@@ -270,9 +300,9 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
       if (t === 'end') {
-        logger.info({ phoneId }, 'send main menu by command');
-        await setSessionState(phoneId, 'MENU', null, 0);
-        await sendText(phoneId, ui.mainMenu);
+        logger.info({ phoneId }, 'requesting new photo upload');
+        await setSessionState(phoneId, 'TOP_MENU', null, 0);
+        await sendText(phoneId, ui.askUpload);
         return Response.json({ ok: true });
       }
 
@@ -283,8 +313,32 @@ export async function POST(req: NextRequest) {
         phoneId,
         userInput: t,
         sessionState: sessionTop.state,
-        isTopMenuSelection: sessionTop.state === 'TOP_MENU' && ['1','2','3'].includes(t)
-      }, 'checking top menu bot selection');
+        isTopMenuSelection: sessionTop.state === 'TOP_MENU' && ['1','2','3'].includes(t),
+        isResultMenuSelection: sessionTop.state === 'RESULT_MENU' && ['1','2','3'].includes(t)
+      }, 'checking session state and command');
+      
+      // Result menu after a generated image (HIGHEST PRIORITY)
+      if (sessionTop.state === 'RESULT_MENU' && ['1','2','3'].includes(t)) {
+        const idxMatch = (sessionTop.submenu || '').match(/IDX:(\d{1,4})/);
+        const idx = idxMatch ? Number(idxMatch[1]) : null;
+        
+        logger.info({ phoneId, resultMenuChoice: t, idx }, 'processing result menu selection');
+        
+        if (t === '3') {
+          logger.info({ phoneId }, 'finishing session from result menu');
+          await setSessionState(phoneId, 'MENU', null, 0);
+          await sendText(phoneId, ui.finishOk);
+          await sendText(phoneId, ui.mainMenu);
+          return Response.json({ ok: true });
+        }
+        const base = t === '1' ? 'RESULT' : 'ORIGINAL';
+        const baseTag = `BASE:${base}` + (idx ? `;IDX:${String(idx).padStart(4, '0')}` : '');
+        
+        logger.info({ phoneId, base, baseTag }, 'setting base for next generation');
+        await setSessionState(phoneId, 'MENU', baseTag, 0);
+        await sendText(phoneId, ui.mainMenu);
+        return Response.json({ ok: true });
+      }
       
       if (sessionTop.state === 'TOP_MENU' && ['1','2','3'].includes(t)) {
         logger.info({ phoneId, selectedBot: t }, 'processing top menu bot selection');
@@ -321,8 +375,8 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
 
-      // Natural language mapping to main options
-      if (!['list', '+', '-', 'delete', 'del'].includes(t) && !['1','2','3'].includes(t)) {
+      // Natural language mapping to main options (only when in MENU state)
+      if (sessionTop.state === 'MENU' && !['list', '+', '-', 'delete', 'del'].includes(t) && !['1','2','3'].includes(t)) {
         if (/scene|effect/i.test(text)) t = '3';
         else if (/styliz|anime|cartoon|painting|art/i.test(text)) t = '2';
         else if (/edit|realism|glasses|makeup|hair|beard|mustache|clothes|background/i.test(text)) t = '1';
@@ -340,7 +394,7 @@ export async function POST(req: NextRequest) {
           currentSessionState: sessionTop.state
         }, 'processing mode selection 1/2/3');
         
-        await setSessionState(phoneId, type);
+        await setSessionState(phoneId, type, sessionTop.submenu);
         const ask = type === 'realism' ? ui.askRealismDetail : type === 'stylize' ? ui.askStylizeDetail : ui.askSceneDetail;
         
         logger.info({
@@ -353,36 +407,40 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
 
-      // Result menu after a generated image
-      const session = await getOrCreateSession(phoneId);
-      if (session.state === 'RESULT_MENU' && ['1','2','3'].includes(t)) {
-        const idxMatch = (session.submenu || '').match(/IDX:(\d{1,4})/);
-        const idx = idxMatch ? Number(idxMatch[1]) : null;
-        if (t === '3') {
-          await setSessionState(phoneId, 'MENU', null, 0);
-          await sendText(phoneId, ui.finishOk);
-          await sendText(phoneId, ui.mainMenu);
-          return Response.json({ ok: true });
-        }
-        const base = t === '1' ? 'RESULT' : 'ORIGINAL';
-        const baseTag = `BASE:${base}` + (idx ? `;IDX:${String(idx).padStart(4, '0')}` : '');
-        await setSessionState(phoneId, 'MENU', baseTag, 0);
-        await sendText(phoneId, ui.mainMenu);
-        return Response.json({ ok: true });
-      }
+
 
       // If we are in a mode, treat text as detail: build GPT prompt and enqueue image job
-      if (['realism', 'stylize', 'scene'].includes(session.state)) {
-        const type = session.state as 'realism' | 'stylize' | 'scene';
+      if (['realism', 'stylize', 'scene'].includes(sessionTop.state)) {
+        const type = sessionTop.state as 'realism' | 'stylize' | 'scene';
         // Submenu letters mapping
         if (['a','b','c','d','e','f'].includes(t)) {
-          await setSessionState(phoneId, session.state, t);
+          // Preserve BASE tag while adding submenu choice
+          const currentSubmenu = sessionTop.submenu || '';
+          const baseMatch = currentSubmenu.match(/BASE:(RESULT|ORIGINAL);IDX:\d{4}/);
+          const newSubmenu = baseMatch ? `${baseMatch[0]};${t}` : t;
+          await setSessionState(phoneId, sessionTop.state, newSubmenu);
+          
+          // Показываем примеры для выбранной категории
+          let exampleText = '';
+          if (type === 'realism' && ui.realismExamples[t as keyof typeof ui.realismExamples]) {
+            exampleText = ui.realismExamples[t as keyof typeof ui.realismExamples];
+          } else if (type === 'stylize' && ui.stylizeExamples[t as keyof typeof ui.stylizeExamples]) {
+            exampleText = ui.stylizeExamples[t as keyof typeof ui.stylizeExamples];
+          } else if (type === 'scene' && ui.sceneExamples[t as keyof typeof ui.sceneExamples]) {
+            exampleText = ui.sceneExamples[t as keyof typeof ui.sceneExamples];
+          }
+          
+          if (exampleText) {
+            await sendText(phoneId, exampleText);
+          }
+          
           await sendText(phoneId, ui.askOwnOption);
           return Response.json({ ok: true });
         }
         // If submenu was f and user sends non-latin text, ask in English
         const isLatin = /^[\p{L}\p{N}\p{P}\p{Zs}]*$/u.test(text) && /[A-Za-z]/.test(text);
-        if ((session.submenu === 'f' || session.submenu === 'F') && !isLatin) {
+        const submenuChoice = (sessionTop.submenu || '').split(';').pop() || '';
+        if ((submenuChoice === 'f' || submenuChoice === 'F') && !isLatin) {
           await sendText(phoneId, 'Please describe in English.');
           return Response.json({ ok: true });
         }
@@ -397,8 +455,8 @@ export async function POST(req: NextRequest) {
           await sendText(phoneId, ui.indecent);
           return Response.json({ ok: true });
         }
-        // GPT summarize
-        const summary = await summarizeEdit(type, userText, session.submenu || undefined);
+        // GPT summarize  
+        const summary = await summarizeEdit(type, userText, submenuChoice || undefined);
         await recordPromptLog(phoneId, type, userText, summary);
         const latest = await getLatestOriginal(phoneId);
         if (!latest) {
@@ -410,18 +468,63 @@ export async function POST(req: NextRequest) {
         // Select base path according to submenu BASE tag if any
         let basePath = latest.fullPath;
         let indexForSave = latest.indexNumber;
-        const sub = session.submenu || '';
+        const sub = sessionTop.submenu || '';
+        
+        logger.info({
+          phoneId,
+          submenu: sub,
+          latestOriginalPath: latest.fullPath,
+          latestIndexNumber: latest.indexNumber
+        }, 'base path selection - initial values');
+        
         const baseMatch = sub.match(/BASE:(RESULT|ORIGINAL)/i);
         if (baseMatch && baseMatch[1].toUpperCase() === 'RESULT') {
           const idxMatch = sub.match(/IDX:(\d{4})/);
           const idx = idxMatch ? Number(idxMatch[1]) : latest.indexNumber;
           indexForSave = idx;
+          
+          logger.info({
+            phoneId,
+            baseType: 'RESULT',
+            indexToUse: idx,
+            idxFromSubmenu: idxMatch?.[1]
+          }, 'using RESULT as base - searching for last variant');
+          
           const photo = await prisma.photo.findUnique({ where: { userId_indexNumber: { userId: phoneId, indexNumber: idx } } });
           if (photo) {
             const lastVar = await prisma.variant.findFirst({ where: { photoId: photo.id }, orderBy: { createdAt: 'desc' } });
-            if (lastVar?.resultPath) basePath = lastVar.resultPath;
+            
+            logger.info({
+              phoneId,
+              photoId: photo.id,
+              lastVariantFound: Boolean(lastVar),
+              lastVariantPath: lastVar?.resultPath,
+              lastVariantMode: lastVar?.mode,
+              lastVariantCreatedAt: lastVar?.createdAt
+            }, 'last variant search result');
+            
+            if (lastVar?.resultPath) {
+              basePath = lastVar.resultPath;
+              logger.info({
+                phoneId,
+                oldBasePath: latest.fullPath,
+                newBasePath: basePath
+              }, 'base path updated to use last result');
+            }
+          } else {
+            logger.warn({
+              phoneId,
+              indexNumber: idx
+            }, 'photo not found for result base path');
           }
         }
+        
+        logger.info({
+          phoneId,
+          finalBasePath: basePath,
+          finalIndexForSave: indexForSave,
+          isUsingResult: baseMatch && baseMatch[1].toUpperCase() === 'RESULT'
+        }, 'final base path selection result');
 
         const job = await imageQueue.add('gen', {
           phoneId,
