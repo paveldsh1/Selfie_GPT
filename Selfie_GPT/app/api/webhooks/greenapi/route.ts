@@ -269,7 +269,8 @@ export async function POST(req: NextRequest) {
           }, 'sending file from list');
           
           // По ТЗ: подсказка на последнем фото если есть еще фото (больше 5), иначе меню
-          const caption = isLast ? (total > 5 ? ui.listHint(total) : ui.listEndHint) : undefined;
+          const remaining = Math.max(total - files.length, 0);
+          const caption = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
           await sendImageFile(phoneId, files[i], caption);
         }
         
@@ -293,7 +294,8 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < files.length; i++) {
           const isLast = i === files.length - 1;
           const newOffset = currentOffset + files.length;
-          const caption = isLast ? (newOffset < total ? ui.listHint(total) : ui.listEndHint) : undefined;
+          const remaining = Math.max(total - newOffset, 0);
+          const caption = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
           await sendImageFile(phoneId, files[i], caption);
         }
         await setSessionState(phoneId, sessionPlus.state, sessionPlus.submenu, currentOffset + files.length);

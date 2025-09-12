@@ -40,7 +40,7 @@ export const ui = {
   },
   resultMore: 'Here is the result. Do you want to change anything else?\n1. Add another effect to the result\n2. Add an effect to the original photo\n3. Finish',
   listCta: 'See all previous photos, write LIST',
-  listHint: (count: number) => `Write "+" to upload more, write "-" to delete all your photos from the server, there are currently ${count} of them.\nWrite "end" to upload new photo\nWrite "delete" to delete all your profile`,
+  listHint: (remaining: number) => `Write "+" to show more (${remaining} left), write "-" to delete all your photos from the server.\nWrite "end" to upload new photo\nWrite "delete" to delete all your profile`,
   listEndHint: 'Write "menu" to Menu\nWrite "del" to delete all your profile',
   askOwnOption: 'Please describe in English.',
   templateIntro: 'Here is a ready-to-edit template. Reply with the edited block to apply:',
