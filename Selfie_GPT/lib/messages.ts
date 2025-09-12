@@ -46,7 +46,11 @@ export const ui = {
   templateIntro: 'Here is a ready-to-edit template. Reply with the edited block to apply:',
   templateFilled: (base: 'ORIGINAL' | 'RESULT', size: string) =>
     `Category: Stylize\nSubcategory: b\nDescription: Anime portrait with starry background\nBase: ${base}\nSize: ${size}`,
-  finishOk: 'Okay. Type "menu" anytime to continue.'
+  finishOk: 'Okay. Type "menu" anytime to continue.',
+  
+  // List originals/variants flow
+  askSelectOriginal: (count: number) => `Your originals (newest first). Reply with 1-${count} to choose.`,
+  noVariantsForOriginal: 'No edited results for this original yet.'
 };
 
 

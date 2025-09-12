@@ -79,6 +79,45 @@ export const listUserFiles = async (phoneId: string, offset: number, limit: numb
   }
 };
 
+export const listOriginals = async (
+  phoneId: string,
+  offset: number,
+  limit: number
+): Promise<{ files: string[]; indices: number[]; total: number }> => {
+  const dir = await ensureUserDir(phoneId);
+  try {
+    const files = (await fsp.readdir(dir))
+      .filter((f) => /^\d{4}\.(jpg|jpeg|png|webp)$/i.test(f))
+      .sort((a, b) => (a < b ? 1 : -1));
+    const page = files.slice(offset, offset + limit);
+    const indices = page.map((f) => Number(f.slice(0, 4)));
+    return { files: page.map((f) => path.join(dir, f)), indices, total: files.length };
+  } catch (e) {
+    logger.error({ phoneId, e: String(e) }, 'listOriginals error');
+    return { files: [], indices: [], total: 0 };
+  }
+};
+
+export const listVariantsFor = async (
+  phoneId: string,
+  indexNumber: number,
+  offset: number,
+  limit: number
+): Promise<{ files: string[]; total: number }> => {
+  const dir = await ensureUserDir(phoneId);
+  const idx = pad4(indexNumber);
+  try {
+    const files = (await fsp.readdir(dir))
+      .filter((f) => new RegExp(`^${idx}_[0-9]+\\.png$`).test(f))
+      .sort((a, b) => (a < b ? 1 : -1));
+    const page = files.slice(offset, offset + limit);
+    return { files: page.map((f) => path.join(dir, f)), total: files.length };
+  } catch (e) {
+    logger.error({ phoneId, indexNumber, e: String(e) }, 'listVariantsFor error');
+    return { files: [], total: 0 };
+  }
+};
+
 export const deleteAllUserData = async (phoneId: string) => {
   const dir = path.join(root, phoneId);
   await fsp.rm(dir, { recursive: true, force: true });

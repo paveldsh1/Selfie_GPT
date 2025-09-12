@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { logger } from '@/lib/logger';
 import { sendText, sendImageFile, downloadFile } from '@/lib/greenapi';
 import { hasHumanFace } from '@/lib/face-detect';
-import { saveOriginal, listUserFiles, deleteAllUserData } from '@/lib/storage';
+import { saveOriginal, listUserFiles, deleteAllUserData, listOriginals, listVariantsFor } from '@/lib/storage';
 import { ui } from '@/lib/messages';
 import { getOrCreateSession, setSessionState, recordPhoto, recordVariant, recordPromptLog, prisma } from '@/lib/db';
 import { buildPrompt } from '@/lib/prompt';
@@ -215,7 +215,7 @@ export async function POST(req: NextRequest) {
       const normalizedCommand = t.replace(/[\.\)\(\s>:_-]/g, '');
       
       // Проверяем является ли это простой командой (цифра или буква)
-      if (/^[1-3]$/.test(normalizedCommand)) {
+      if (/^[0-9]$/.test(normalizedCommand)) {
         t = normalizedCommand;
       } else if (/^[a-f]$/.test(normalizedCommand)) {
         t = normalizedCommand;
@@ -226,7 +226,7 @@ export async function POST(req: NextRequest) {
         originalText: text, 
         normalizedText: t,
         normalizedCommand,
-        isSimpleCommand: /^[1-3a-f]$/.test(normalizedCommand)
+        isSimpleCommand: /^[0-9a-f]$/.test(normalizedCommand)
       }, 'textMessage received and processed');
 
       // Top-level commands
@@ -242,47 +242,70 @@ export async function POST(req: NextRequest) {
         return Response.json({ ok: true });
       }
       if (t === 'list') {
-        logger.info({ phoneId }, 'processing list command');
-        // По ТЗ: показываем первые 5 изображений с подсказкой
-        const { files, total } = await listUserFiles(phoneId, 0, 5);
-        
-        logger.info({ 
-          phoneId, 
-          filesCount: files.length, 
-          totalFiles: total,
-          filesList: files 
-        }, 'list command - files retrieved');
-        
+        logger.info({ phoneId }, 'processing list command - originals mode');
+        // Показываем последние 5 ОРИГИНАЛОВ с подсказкой и просьбой выбрать 1-5
+        const { files, indices, total } = await listOriginals(phoneId, 0, 5);
         if (files.length === 0) {
-          logger.info({ phoneId }, 'no files found - sending message');
           await sendText(phoneId, 'No photos found. Upload a selfie first.');
           return Response.json({ ok: true });
         }
-        
         for (let i = 0; i < files.length; i++) {
           const isLast = i === files.length - 1;
-          logger.info({ 
-            phoneId, 
-            fileIndex: i, 
-            fileName: files[i], 
-            isLast 
-          }, 'sending file from list');
-          
-          // По ТЗ: подсказка на последнем фото если есть еще фото (больше 5), иначе меню
           const remaining = Math.max(total - files.length, 0);
-          const caption = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
+          const hint = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
+          const caption = isLast ? `${ui.askSelectOriginal(files.length)}\n${hint ?? ''}`.trim() : undefined;
           await sendImageFile(phoneId, files[i], caption);
         }
-        
-        // Сохраняем offset = files.length для команды "+"
-        const currentSession = await getOrCreateSession(phoneId);
-        await setSessionState(phoneId, currentSession.state, currentSession.submenu, files.length);
-        
-        logger.info({ phoneId, sentFiles: files.length }, 'list command completed');
+        const submenu = `MODE:ORIG;IND:${indices.join(',')};OFF:0;TOT:${total}`;
+        await setSessionState(phoneId, 'LIST_ORIGINALS', submenu, files.length);
         return Response.json({ ok: true });
       }
       if (t === '+') {
         const sessionPlus = await getOrCreateSession(phoneId);
+        // Пагинация в режимах списка
+        if (sessionPlus.state === 'LIST_ORIGINALS') {
+          const currentOffset = sessionPlus.paginationOffset ?? 0;
+          const { files, indices, total } = await listOriginals(phoneId, currentOffset, 5);
+          if (files.length === 0) {
+            await sendText(phoneId, ui.listEndHint);
+            return Response.json({ ok: true });
+          }
+          for (let i = 0; i < files.length; i++) {
+            const isLast = i === files.length - 1;
+            const newOffset = currentOffset + files.length;
+            const remaining = Math.max(total - newOffset, 0);
+            const hint = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
+            const caption = isLast ? `${ui.askSelectOriginal(files.length)}\n${hint ?? ''}`.trim() : undefined;
+            await sendImageFile(phoneId, files[i], caption);
+          }
+          const submenu = `MODE:ORIG;IND:${indices.join(',')};OFF:${currentOffset};TOT:${total}`;
+          await setSessionState(phoneId, 'LIST_ORIGINALS', submenu, currentOffset + files.length);
+          return Response.json({ ok: true });
+        }
+        if (sessionPlus.state === 'LIST_VARIANTS') {
+          const currentOffset = sessionPlus.paginationOffset ?? 0;
+          const idxMatch = (sessionPlus.submenu || '').match(/IDX:(\d{4})/);
+          const idx = idxMatch ? Number(idxMatch[1]) : null;
+          if (!idx) {
+            await sendText(phoneId, ui.listEndHint);
+            return Response.json({ ok: true });
+          }
+          const { files, total } = await listVariantsFor(phoneId, idx, currentOffset, 5);
+          if (files.length === 0) {
+            await sendText(phoneId, ui.listEndHint);
+            return Response.json({ ok: true });
+          }
+          for (let i = 0; i < files.length; i++) {
+            const isLast = i === files.length - 1;
+            const newOffset = currentOffset + files.length;
+            const remaining = Math.max(total - newOffset, 0);
+            const caption = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
+            await sendImageFile(phoneId, files[i], caption);
+          }
+          await setSessionState(phoneId, 'LIST_VARIANTS', sessionPlus.submenu, currentOffset + files.length);
+          return Response.json({ ok: true });
+        }
+        // Старое поведение
         const currentOffset = sessionPlus.paginationOffset ?? 0;
         const { files, total } = await listUserFiles(phoneId, currentOffset, 5);
         
@@ -324,6 +347,38 @@ export async function POST(req: NextRequest) {
         isTopMenuSelection: sessionTop.state === 'TOP_MENU' && ['1','2','3'].includes(t),
         isResultMenuSelection: sessionTop.state === 'RESULT_MENU' && ['1','2','3'].includes(t)
       }, 'checking session state and command');
+
+      // Выбор оригинала из меню 1-5
+      if (sessionTop.state === 'LIST_ORIGINALS' && /^[0-9]$/.test(t)) {
+        const indMatch = (sessionTop.submenu || '').match(/IND:([0-9,]+)/);
+        const indStr = indMatch?.[1] || '';
+        const arr = indStr.split(',').map((s) => Number(s)).filter((n) => n > 0);
+        const sel = Number(t) - 1;
+        const chosenIdx = arr[sel];
+        if (!chosenIdx) {
+          await sendText(phoneId, ui.askSelectOriginal(arr.length || 5));
+          return Response.json({ ok: true });
+        }
+        // При выборе — показываем сам оригинал и его варианты
+        const photo = await prisma.photo.findUnique({ where: { userId_indexNumber: { userId: phoneId, indexNumber: chosenIdx } } });
+        if (photo?.originalPath) {
+          await sendImageFile(phoneId, photo.originalPath, `Selected original`);
+        }
+        const { files: varFiles, total: varTotal } = await listVariantsFor(phoneId, chosenIdx, 0, 5);
+        if (varFiles.length === 0) {
+          await sendText(phoneId, ui.noVariantsForOriginal);
+          await setSessionState(phoneId, 'LIST_VARIANTS', `IDX:${String(chosenIdx).padStart(4, '0')}`, 0);
+          return Response.json({ ok: true });
+        }
+        for (let i = 0; i < varFiles.length; i++) {
+          const isLast = i === varFiles.length - 1;
+          const remaining = Math.max(varTotal - varFiles.length, 0);
+          const caption = isLast ? (remaining > 0 ? ui.listHint(remaining) : ui.listEndHint) : undefined;
+          await sendImageFile(phoneId, varFiles[i], caption);
+        }
+        await setSessionState(phoneId, 'LIST_VARIANTS', `IDX:${String(chosenIdx).padStart(4, '0')}`, varFiles.length);
+        return Response.json({ ok: true });
+      }
       
       // Result menu after a generated image (HIGHEST PRIORITY)
       if (sessionTop.state === 'RESULT_MENU' && ['1','2','3'].includes(t)) {
