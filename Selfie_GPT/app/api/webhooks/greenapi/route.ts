@@ -161,7 +161,13 @@ export async function POST(req: NextRequest) {
       const saved = await saveOriginal(phoneId, bin, ext);
       // persist in DB
       await recordPhoto(phoneId, saved.indexNumber, saved.fullPath, messageData?.fileMessageData?.mimeType || 'image/jpeg');
-      logger.info({ phoneId, ext }, 'original saved, awaiting bot selection');
+      logger.info({ phoneId, ext }, 'original saved, deciding next step');
+      const awaitingSelfie = (session0.state === 'AWAIT_SELFIE');
+      if (awaitingSelfie) {
+        await setSessionState(phoneId, 'MENU');
+        await sendText(phoneId, ui.mainMenu);
+        return Response.json({ ok: true });
+      }
       await setSessionState(phoneId, 'TOP_MENU');
       await sendText(phoneId, ui.topMenu);
       await sendText(phoneId, ui.askSelectBot);
@@ -205,8 +211,8 @@ export async function POST(req: NextRequest) {
       // recentTextIn.set(phoneId, { text, ts: nowIn });
       let t = text.toLowerCase();
       
-      // Нормализация команд: убираем точки, скобки, пробелы
-      const normalizedCommand = t.replace(/[.\)\(\s]/g, '');
+      // Нормализация команд: убираем точки, скобки, пробелы, '>' и типичные разделители
+      const normalizedCommand = t.replace(/[\.\)\(\s>:_-]/g, '');
       
       // Проверяем является ли это простой командой (цифра или буква)
       if (/^[1-3]$/.test(normalizedCommand)) {
@@ -344,16 +350,10 @@ export async function POST(req: NextRequest) {
         logger.info({ phoneId, selectedBot: t }, 'processing top menu bot selection');
         
         if (t === '1') {
-          logger.info({ phoneId }, 'selected Selfie bot - checking for selfie requirement');
-          // Only check for selfie when user selects Selfie bot
-          const latestOrig = await getLatestOriginal(phoneId);
-          if (!latestOrig) {
-            await sendText(phoneId, ui.askUpload);
-            return Response.json({ ok: true });
-          }
-          logger.info({ phoneId }, 'selfie found - transitioning to main menu');
-          await setSessionState(phoneId, 'MENU', null, 0);
-          await sendText(phoneId, ui.mainMenu);
+          logger.info({ phoneId }, 'selected Selfie bot - asking for selfie upload');
+          // Всегда просим загрузить селфи
+          await setSessionState(phoneId, 'AWAIT_SELFIE', 'BOT:SELFIE', 0);
+          await sendText(phoneId, ui.askUpload);
           return Response.json({ ok: true });
         }
         if (t === '2') {
