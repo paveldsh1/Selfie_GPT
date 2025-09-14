@@ -86,9 +86,13 @@ export const listOriginals = async (
 ): Promise<{ files: string[]; indices: number[]; total: number }> => {
   const dir = await ensureUserDir(phoneId);
   try {
-    const files = (await fsp.readdir(dir))
-      .filter((f) => /^\d{4}\.(jpg|jpeg|png|webp)$/i.test(f))
-      .sort((a, b) => (a < b ? 1 : -1));
+    const all = (await fsp.readdir(dir)).filter((f) => /^\d{4}\.(jpg|jpeg|png|webp)$/i.test(f));
+    // Надежная сортировка по числовому индексу, по убыванию (новые первые)
+    const files = all.sort((a, b) => {
+      const ai = Number(a.slice(0, 4));
+      const bi = Number(b.slice(0, 4));
+      return bi - ai;
+    });
     const page = files.slice(offset, offset + limit);
     const indices = page.map((f) => Number(f.slice(0, 4)));
     return { files: page.map((f) => path.join(dir, f)), indices, total: files.length };

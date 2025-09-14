@@ -12,6 +12,7 @@ import { queue as imageQueue } from '@/jobs/image-generate';
 import { getLatestOriginal } from '@/lib/storage';
 import { summarizeEdit, moderateText } from '@/lib/openai';
 import mime from 'mime-types';
+import { scheduleReminder } from '@/jobs/reminder';
 
 const webhookSchema = z.object({
   typeWebhook: z.string(),
@@ -171,6 +172,14 @@ export async function POST(req: NextRequest) {
       await setSessionState(phoneId, 'TOP_MENU');
       await sendText(phoneId, ui.topMenu);
       await sendText(phoneId, ui.askSelectBot);
+      await scheduleReminder({
+        phoneId,
+        kind: 'TOP_MENU',
+        stateSnapshot: 'TOP_MENU',
+        submenuSnapshot: null,
+        menuText: `${ui.topMenu}\n${ui.askSelectBot}`,
+        delayMs: 30000
+      });
       return Response.json({ ok: true });
     }
 
@@ -234,6 +243,14 @@ export async function POST(req: NextRequest) {
         await setSessionState(phoneId, 'TOP_MENU', null, 0);
         await sendText(phoneId, ui.topMenu);
         await sendText(phoneId, ui.askSelectBot);
+        await scheduleReminder({
+          phoneId,
+          kind: 'TOP_MENU',
+          stateSnapshot: 'TOP_MENU',
+          submenuSnapshot: null,
+          menuText: `${ui.topMenu}\n${ui.askSelectBot}`,
+          delayMs: 30000
+        });
         return Response.json({ ok: true });
       }
       if (t === 'template') {
@@ -392,6 +409,14 @@ export async function POST(req: NextRequest) {
           await setSessionState(phoneId, 'MENU', null, 0);
           await sendText(phoneId, ui.finishOk);
           await sendText(phoneId, ui.mainMenu);
+          await scheduleReminder({
+            phoneId,
+            kind: 'MENU',
+            stateSnapshot: 'MENU',
+            submenuSnapshot: null,
+            menuText: ui.mainMenu,
+            delayMs: 30000
+          });
           return Response.json({ ok: true });
         }
         const base = t === '1' ? 'RESULT' : 'ORIGINAL';
@@ -400,6 +425,14 @@ export async function POST(req: NextRequest) {
         logger.info({ phoneId, base, baseTag }, 'setting base for next generation');
         await setSessionState(phoneId, 'MENU', baseTag, 0);
         await sendText(phoneId, ui.mainMenu);
+        await scheduleReminder({
+          phoneId,
+          kind: 'MENU',
+          stateSnapshot: 'MENU',
+          submenuSnapshot: baseTag,
+          menuText: ui.mainMenu,
+          delayMs: 30000
+        });
         return Response.json({ ok: true });
       }
       
@@ -411,6 +444,14 @@ export async function POST(req: NextRequest) {
           // Всегда просим загрузить селфи
           await setSessionState(phoneId, 'AWAIT_SELFIE', 'BOT:SELFIE', 0);
           await sendText(phoneId, ui.askUpload);
+          await scheduleReminder({
+            phoneId,
+            kind: 'MENU',
+            stateSnapshot: 'AWAIT_SELFIE',
+            submenuSnapshot: 'BOT:SELFIE',
+            menuText: ui.askUpload,
+            delayMs: 30000
+          });
           return Response.json({ ok: true });
         }
         if (t === '2') {
@@ -429,6 +470,15 @@ export async function POST(req: NextRequest) {
       const latestOrig = await getLatestOriginal(phoneId);
       if (!latestOrig) {
         await sendText(phoneId, ui.askUpload);
+        const sNow = await getOrCreateSession(phoneId);
+        await scheduleReminder({
+          phoneId,
+          kind: 'MENU',
+          stateSnapshot: sNow.state,
+          submenuSnapshot: sNow.submenu ?? null,
+          menuText: ui.askUpload,
+          delayMs: 30000
+        });
         return Response.json({ ok: true });
       }
 
@@ -461,6 +511,14 @@ export async function POST(req: NextRequest) {
         }, 'sending detail selection menu');
         
         await sendText(phoneId, ask);
+        await scheduleReminder({
+          phoneId,
+          kind: 'DETAIL',
+          stateSnapshot: type,
+          submenuSnapshot: sessionTop.submenu ?? null,
+          menuText: ask,
+          delayMs: 30000
+        });
         return Response.json({ ok: true });
       }
 
@@ -492,6 +550,15 @@ export async function POST(req: NextRequest) {
           }
           
           await sendText(phoneId, ui.askOwnOption);
+          const newSession = await getOrCreateSession(phoneId);
+          await scheduleReminder({
+            phoneId,
+            kind: 'DESC',
+            stateSnapshot: newSession.state,
+            submenuSnapshot: newSession.submenu ?? null,
+            menuText: ui.askOwnOption,
+            delayMs: 60000
+          });
           return Response.json({ ok: true });
         }
         // If submenu was f and user sends non-latin text, ask in English
@@ -499,6 +566,15 @@ export async function POST(req: NextRequest) {
         const submenuChoice = (sessionTop.submenu || '').split(';').pop() || '';
         if ((submenuChoice === 'f' || submenuChoice === 'F') && !isLatin) {
           await sendText(phoneId, 'Please describe in English.');
+          const sNow = await getOrCreateSession(phoneId);
+          await scheduleReminder({
+            phoneId,
+            kind: 'DESC',
+            stateSnapshot: sNow.state,
+            submenuSnapshot: sNow.submenu ?? null,
+            menuText: 'Please describe in English.',
+            delayMs: 60000
+          });
           return Response.json({ ok: true });
         }
         const userText = text;
@@ -593,6 +669,14 @@ export async function POST(req: NextRequest) {
         logger.info({ phoneId, jobId: job.id, mode }, 'image job enqueued');
         await sendText(phoneId, 'Processing… I will send the result soon.');
         await setSessionState(phoneId, 'MENU', null, 0);
+        await scheduleReminder({
+          phoneId,
+          kind: 'MENU',
+          stateSnapshot: 'MENU',
+          submenuSnapshot: null,
+          menuText: ui.mainMenu,
+          delayMs: 30000
+        });
         return Response.json({ ok: true });
       }
 

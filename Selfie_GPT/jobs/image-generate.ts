@@ -6,6 +6,7 @@ import { saveVariant } from '../lib/storage';
 import { sendImageFile, sendText } from '../lib/greenapi';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/db';
+import { scheduleReminder } from './reminder';
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 const connection = new IORedis(redisUrl, {
@@ -42,6 +43,14 @@ new Worker<ImageJob>(
     } catch {}
     await sendText(phoneId, 'Here is the result. Do you want to change anything else?\n1. Add another effect to the result\n2. Add an effect to the original photo\n3. Finish');
     await sendText(phoneId, 'See all previous photos, write LIST');
+    await scheduleReminder({
+      phoneId,
+      kind: 'RESULT_MENU',
+      stateSnapshot: 'RESULT_MENU',
+      submenuSnapshot: `IDX:${String(indexNumber).padStart(4,'0')}`,
+      menuText: 'Here is the result. Do you want to change anything else?\n1. Add another effect to the result\n2. Add an effect to the original photo\n3. Finish',
+      delayMs: 30000
+    });
   },
   { connection }
 ).on('failed', (job, err) => {
