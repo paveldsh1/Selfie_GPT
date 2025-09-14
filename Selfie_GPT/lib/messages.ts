@@ -47,6 +47,7 @@ export const ui = {
   templateFilled: (base: 'ORIGINAL' | 'RESULT', size: string) =>
     `Category: Stylize\nSubcategory: b\nDescription: Anime portrait with starry background\nBase: ${base}\nSize: ${size}`,
   finishOk: 'Okay. Type "menu" anytime to continue.',
+  askUploadOrMenu: 'Upload new selfie or write "menu"',
   
   // List originals/variants flow
   askSelectOriginal: (count: number) => `Your originals (newest first). Reply with 1-${count} to choose.`,

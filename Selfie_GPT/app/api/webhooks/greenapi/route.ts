@@ -345,6 +345,17 @@ export async function POST(req: NextRequest) {
         logger.warn({ phoneId }, 'delete all requested');
         await deleteAllUserData(phoneId);
         await sendText(phoneId, 'All your data has been deleted.');
+        // Не даём диалогу «замереть»: просим новое действие и ставим ожидание селфи
+        await setSessionState(phoneId, 'AWAIT_SELFIE', null, 0);
+        await sendText(phoneId, ui.askUploadOrMenu);
+        await scheduleReminder({
+          phoneId,
+          kind: 'MENU',
+          stateSnapshot: 'AWAIT_SELFIE',
+          submenuSnapshot: null,
+          menuText: ui.askUploadOrMenu,
+          delayMs: 30000
+        });
         return Response.json({ ok: true });
       }
       if (t === 'end') {
@@ -556,7 +567,7 @@ export async function POST(req: NextRequest) {
             kind: 'DESC',
             stateSnapshot: newSession.state,
             submenuSnapshot: newSession.submenu ?? null,
-            menuText: ui.askOwnOption,
+            menuText: exampleText ? `${exampleText}\n${ui.askOwnOption}` : ui.askOwnOption,
             delayMs: 60000
           });
           return Response.json({ ok: true });
@@ -565,6 +576,14 @@ export async function POST(req: NextRequest) {
         const isLatin = /^[\p{L}\p{N}\p{P}\p{Zs}]*$/u.test(text) && /[A-Za-z]/.test(text);
         const submenuChoice = (sessionTop.submenu || '').split(';').pop() || '';
         if ((submenuChoice === 'f' || submenuChoice === 'F') && !isLatin) {
+          // Повторяем примеры вместе с просьбой описать на английском
+          let exampleText = '';
+          if (type === 'realism') exampleText = ui.realismExamples.f;
+          else if (type === 'stylize') exampleText = ui.stylizeExamples.f;
+          // Для scene нет категории f — примеры не добавляем
+          if (exampleText) {
+            await sendText(phoneId, exampleText);
+          }
           await sendText(phoneId, 'Please describe in English.');
           const sNow = await getOrCreateSession(phoneId);
           await scheduleReminder({
@@ -572,7 +591,7 @@ export async function POST(req: NextRequest) {
             kind: 'DESC',
             stateSnapshot: sNow.state,
             submenuSnapshot: sNow.submenu ?? null,
-            menuText: 'Please describe in English.',
+            menuText: exampleText ? `${exampleText}\nPlease describe in English.` : 'Please describe in English.',
             delayMs: 60000
           });
           return Response.json({ ok: true });
