@@ -210,6 +210,14 @@ export async function POST(req: NextRequest) {
         textLength: text.length
       }, 'text extraction result');
       
+      // Любое входящее сообщение считаем активностью пользователя —
+      // это предотвращает срабатывание ранее запланированных напоминаний
+      try {
+        const now = new Date();
+        const s = await getOrCreateSession(phoneId);
+        await prisma.session.update({ where: { userId: phoneId }, data: { lastTextAt: now, updatedAt: now } });
+      } catch {}
+
       // Убрана блокировка дублей входящих сообщений (5 секунд)
       // const prevIn = recentTextIn.get(phoneId);
       // const nowIn = Date.now();

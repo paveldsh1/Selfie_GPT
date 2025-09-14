@@ -71,7 +71,12 @@ new Worker<ReminderJob>(
       // If user progressed (state or submenu changed) or any update happened after scheduling — skip
       if (session.state !== stateSnapshot) return;
       if (typeof submenuSnapshot !== 'undefined' && submenuSnapshot !== session.submenu) return;
-      if (new Date(session.updatedAt).getTime() > scheduledAt + 1000) return;
+      // Любая активность после планирования отменяет напоминание
+      const updatedAtMs = new Date(session.updatedAt).getTime();
+      if (updatedAtMs > scheduledAt + 1000) return;
+      const lastTextMs = session.lastTextAt ? new Date(session.lastTextAt).getTime() : 0;
+      // Грейс-окно: если пользователь писал в пределах 10 секунд ДО срабатывания, не напоминаем
+      if (lastTextMs && lastTextMs >= scheduledAt - 10000) return;
 
       logger.warn({ phoneId, kind }, 'reminder: no reply detected — sending prompt again');
       await sendText(phoneId, 'Your reply has not reached us, please repeat');
