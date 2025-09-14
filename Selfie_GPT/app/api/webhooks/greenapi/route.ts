@@ -417,15 +417,14 @@ export async function POST(req: NextRequest) {
         
         if (t === '3') {
           logger.info({ phoneId }, 'finishing session from result menu');
-          await setSessionState(phoneId, 'MENU', null, 0);
-          await sendText(phoneId, ui.finishOk);
-          await sendText(phoneId, ui.mainMenu);
+          await setSessionState(phoneId, 'AWAIT_SELFIE', null, 0);
+          await sendText(phoneId, ui.askUploadOrMenu);
           await scheduleReminder({
             phoneId,
             kind: 'MENU',
-            stateSnapshot: 'MENU',
+            stateSnapshot: 'AWAIT_SELFIE',
             submenuSnapshot: null,
-            menuText: ui.mainMenu,
+            menuText: ui.askUploadOrMenu,
             delayMs: 30000
           });
           return Response.json({ ok: true });
