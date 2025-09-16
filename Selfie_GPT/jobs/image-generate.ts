@@ -7,6 +7,7 @@ import { sendImageFile, sendText } from '../lib/greenapi';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/db';
 import { scheduleReminder } from './reminder';
+import { enforceFacePolicy } from '../lib/face-policy';
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 const connection = new IORedis(redisUrl, {
@@ -28,13 +29,15 @@ new Worker<ImageJob>(
   'image-generate',
   async (job) => {
     const { phoneId, indexNumber, mode, basePath, prompt } = job.data;
+    // Enforce face policy: if prompt doesn't explicitly allow face changes, we preserve the face
+    const safePrompt = await enforceFacePolicy(prompt);
     // Send original/base file directly to OpenAI without creating normalized temp files
-    const buf = await imageEdit({ imagePath: basePath, prompt });
+    const buf = await imageEdit({ imagePath: basePath, prompt: safePrompt });
     const saved = await saveVariant(phoneId, indexNumber, mode, buf);
     // Persist Variant in DB
     const photo = await prisma.photo.findUnique({ where: { userId_indexNumber: { userId: phoneId, indexNumber } } });
     if (photo) {
-      await prisma.variant.create({ data: { photoId: photo.id, mode, resultPath: saved.fullPath, promptText: prompt } });
+      await prisma.variant.create({ data: { photoId: photo.id, mode, resultPath: saved.fullPath, promptText: safePrompt } });
     }
     await sendImageFile(phoneId, saved.fullPath, 'Here is the result.');
     // After result, set RESULT_MENU state with index tag
