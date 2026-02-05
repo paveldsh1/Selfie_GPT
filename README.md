@@ -109,11 +109,15 @@ sequenceDiagram
 - `PromptLog` — input and summarized prompt
 
 ### Tech Stack
-- Next.js 14 (App Router) + Node.js 20
-- Prisma + PostgreSQL
-- Redis + BullMQ
-- OpenAI Images + Moderation, Green‑API
-- Sharp, TensorFlow/Blazeface
+- Runtime & language — Node.js 20, TypeScript 5 (ESM)
+- Web framework — Next.js 14 (App Router), React 18
+- Data layer — PostgreSQL, Prisma
+- Queues & workers — Redis, BullMQ, `tsx`
+- AI & vision — OpenAI Images + Moderation, TensorFlow.js + Blazeface
+- Media processing — Sharp, jpeg-js, mime-types
+- Integrations — Green‑API (WhatsApp), axios, form-data
+- Config & logging — dotenv, zod, pino
+- Infra — Docker, Docker Compose
 
 ### Run (local)
 1. `npm i`
@@ -252,11 +256,15 @@ sequenceDiagram
 - `PromptLog` — исходный текст и итоговый prompt
 
 ### Технологии
-- Next.js 14 (App Router) + Node.js 20
-- Prisma + PostgreSQL
-- Redis + BullMQ
-- OpenAI Images + Moderation, Green‑API
-- Sharp, TensorFlow/Blazeface
+- Среда и язык — Node.js 20, TypeScript 5 (ESM)
+- Веб‑фреймворк — Next.js 14 (App Router), React 18
+- Данные — PostgreSQL, Prisma
+- Очереди и воркеры — Redis, BullMQ, `tsx`
+- AI и CV — OpenAI Images + Moderation, TensorFlow.js + Blazeface
+- Обработка медиа — Sharp, jpeg-js, mime-types
+- Интеграции — Green‑API (WhatsApp), axios, form-data
+- Конфигурация и логирование — dotenv, zod, pino
+- Инфраструктура — Docker, Docker Compose
 
 ### Запуск (локально)
 1. `npm i`
